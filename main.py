@@ -1,9 +1,20 @@
 from triad_openvr import *
-
+import socket
 from pydantic import BaseModel, Field
 import json
 
+from multiprocessing import Process, Pipe
+import gui
+
 CONNECT_RETRY_INTERVAL = 1
+VR_UPDATE_INTERVAL = 1
+MULTICAST_TTL = 2
+
+
+class UDPConfig(BaseModel):
+    host: str = Field(default='239.0.0.0')  # Administratively scoped IPv4 address space, only change last 3 numbers!
+    port: int = Field(default=5007)         # port, any can be used.
+
 
 class TrackerState(BaseModel):
     valid: int = Field(default=0)
@@ -23,13 +34,13 @@ class TrackerState(BaseModel):
     w2: float = Field(default=0)
     w3: float = Field(default=0)
     
-    def unpack_vive_device(self, device):
+    def unpack_vive_device(self, device, label):
         
         pose = device.get_pose_quaternion()
-        vel  = device.get_velocity()
-        angvel = device.get_angular_velocity()
+        vel = device.get_velocity()
+        w = device.get_angular_velocity()
         
-        if not pose and vel and angvel:
+        if not pose and vel and w:
             self.valid = False
             return
         
@@ -37,30 +48,38 @@ class TrackerState(BaseModel):
         
         self.xi, self.xj, self.xk, self.qr, self.qi, self.qj, self.qk = pose
         self.v1, self.v2, self.v3 = vel
-        self.w1, self.w2, self.w3 = angvel
+        self.w1, self.w2, self.w3 = w
+
+        self.serial = device.get_serial()
+        self.label = label
+
+        # TODO: calibration
         
-        #TODO: label
-        #TODO: serial
-        #TODO: calibration
-        
+        return
+
+    def to_bytes(self):
+        json_data = json.dumps(self.json(), sort_keys=False)
+        json_data = json_data + "\r"
+        return json_data.encode()
+
+    def from_bytes(self, json_msg):
+        d = json.loads(json_msg.decode())
+        self.parse_obj(d)
         return
         
 
-class UDPConfig(BaseModel):
-    host: str = Field(default = '239.0.0.0') # Administratively scoped IPv4 address space, only change last 3 numbers!
-    port: int = Field(default = 5007)        # port, any can be used.
-    
-    
-class ViveServer(config: UDPConfig = UDPConfig()):
-    def __init__(self):
+class ViveServer:
+    def __init__(self, config: UDPConfig = UDPConfig()):
         self.config = config
         
         self.vr = None
         self.socket = None
         self.group = None
         self.gui = None
-        
-        self.step()
+        self.gui_pipe = None
+        self.trackers = []
+        self.tracker_labels = []
+        self.references = []
 
     def step(self):
         if not self.vr:
@@ -80,7 +99,8 @@ class ViveServer(config: UDPConfig = UDPConfig()):
                 self.broadcast()
                 
     def open_vr(self):
-        if self.connect_attempt_limit('vr'): return
+        if self.connect_attempt_limit('vr'):
+            return
         
         try:
             self.vr = TriadOpenVR()
@@ -88,7 +108,8 @@ class ViveServer(config: UDPConfig = UDPConfig()):
             self.vr = None
 
     def open_socket(self):
-        if self.connect_attempt_limit('socket'): return
+        if self.connect_attempt_limit('socket'):
+            return
         
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
@@ -96,14 +117,18 @@ class ViveServer(config: UDPConfig = UDPConfig()):
             sock.setsockopt(socket.SOL_IP, socket.IP_MULTICAST_LOOP, 1)
             self.socket = sock
             self.group  = (self.config.host, self.config.port)
-        except socekt.error:
+        except socket.error:
             self.socket = None
             
         return
         
     def open_gui(self):
-        if self.connect_attempt_limit('gui'): return
-        #TODO
+        if self.connect_attempt_limit('gui'):
+            return
+        self.gui_pipe, child_conn = Pipe()
+        self.gui = gui.GuiManager(child_conn)
+        self.gui_process = Process(target = self.gui.start)
+        self.gui_process.start()
         return 
     
     def connect_attempt_limit(self, label):
@@ -119,64 +144,74 @@ class ViveServer(config: UDPConfig = UDPConfig()):
                 self.__setattr__(label_str, current_time)
                 return False
             return True
-    
-       
+
     def update_vr(self):
+        # TODO: could put on timed event for better efficiency
+        if self.update_vr_limit():
+            return
+
         self.vr.poll_vr_events()
-        #TODO sort items, update tracker list, update stuff to be send to GUI.
+
+        self.trackers = []
+        self.tracker_labels = []
+        self.references = []
+
+        for device_label in self.vr.devices:
+            device = self.vr.devices[device_label]
+            if device.device_class == 'Tracker':
+                self.trackers.append(device)
+                self.tracker_labels.append(device_label)
+            elif device.device_class == 'Tracking Reference':
+                self.references.append(device)
+
         return
-    
+
+    def update_vr_limit(self):
+        if not hasattr(self, '_last_vr_update'):
+            self._last_vr_update = time.time()
+            return False
+        else:
+            if time.time() - self._last_vr_update > VR_UPDATE_INTERVAL:
+                self._last_vr_update = time.time()
+                return False
+            return True
+
     def update_gui(self):
-        #TODO
+        gui_msg = []
+
+        for ref in self.references:
+            ref_msg = TrackerState()
+            ref_msg.unpack_vive_device(ref, 'ref')
+            gui_msg.append(ref_msg)
+        for device, device_label in zip(self.trackers, self.tracker_labels):
+            msg = TrackerState()
+            msg.unpack_vive_device(device, device_label)
+            gui_msg.append(msg)
+
+        self.gui_pipe.send(gui_msg)
         return
 
     def broadcast(self):
-        msg = #TODO
+        msgs = self.get_broadcast_messages()
         try:
-            self.soscket.sendto(msg, self.group):
+            for msg in msgs:
+                self.socket.sendto(msg, self.group)
         except socket.error:
             self.socket = None
         return
 
-    def get_broadcast_message(self):
+    def get_broadcast_messages(self):
         msgs = []
-        for device_label in self.vr.devices:
-            device = self.vr.devices[device_label]
-            if device.device_class == 'Tracker':
-
-                state = self.get_device_state(device, device_label)
-                msgs.append(state)
+        for device, device_label in zip(self.trackers, self.tracker_labels):
+            msg = TrackerState()
+            msg.unpack_vive_device(device, device_label)
+            msgs.append(msg.to_bytes())
         return msgs
-
-    def get_device_state(self, device, label):
-        xi, xj, xk, qr, qi, qj, qk = device.get_pose_quaternion()
-        vi, vj, vk = device.get_velocity()
-        wi, wj, wk = device.get_angular_velocity()
-
-        return TrackerState(label = label,
-                            xi = xi,
-                            xj = xj,
-                            xk = xk,
-                            qi = qi,
-                            qj = qj,
-                            qk = qk,
-                            qr = qr,
-                            v1 = vi,
-                            v2 = vj,
-                            v3 = vk,
-                            w1 = wi,
-                            w2 = wj,
-                            w3 = wk)
 
 
 if __name__ == '__main__':
     server = ViveServer()
 
-    for _ in range(1):
+    while True:
         server.step()
-        msg = server.get_broadcast_message()
-        dill_msg = dill.dumps(msg)
-        import pdb
-        pdb.set_trace()
-        print(len(dill_msg))
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+
