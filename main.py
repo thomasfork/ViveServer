@@ -5,7 +5,7 @@ import json
 import numpy as np
 
 from multiprocessing import Process, Pipe
-import gui2
+import gui
 
 from scipy.spatial.transform import Rotation as rotation
 
@@ -129,7 +129,7 @@ class ViveServer:
         elif not self.gui.is_alive():
             self.should_close = True
         
-        if True: #self.vr:
+        if True: #self.vr: # TODO uncomment hardware use
             #self.update_vr()
             
             self.poll_vr()
@@ -174,7 +174,7 @@ class ViveServer:
             return
         self.gui_pipe, child_conn = Pipe()
         
-        self.gui = Process(target = gui2.Window, args = (child_conn,))
+        self.gui = Process(target = gui.Window, args = (child_conn,))
         self.gui.start()
         return 
     
@@ -263,12 +263,24 @@ class ViveServer:
         self.calibration_rotation = rotation.from_matrix(np.eye(3))
         
     def update_calibration(self, origin_label, x_label, y_label):
-        # TODO: get states by name and poll data for some time to average out noise.
-        print('updating calibration')
+        # TODO: poll data for some time to average out noise.
         
-        to = TrackerState(xi = 0.8, xj = 0.9, serial = 'LHR1', label = 'T_1', charge = 10)
-        tx = TrackerState(xi = -0.3, xj = 0.5, serial = 'LHR2', label = 'T_2', charge = 20)
-        ty = TrackerState(xi = 1.3, xj = 0.5, serial = 'LHR3', label = 'T_3', charge = 40)
+        present_labels = [device.label for device in self.tracker_states]
+        
+        try:
+            origin_index = present_labels.index(origin_label)
+            x_index = present_labels.index(x_label)
+            y_index = present_labels.index(y_label)
+        except ValueError:
+            print('calibration trackers not all present')
+            return
+            
+        print('updating calibration')
+            
+        
+        to = self.tracker_states[origin_index]
+        tx = self.tracker_states[x_index]
+        ty = self.tracker_states[y_index]
         
         x_origin = np.array([to.xi, to.xj, to.xk])
         x_x      = np.array([tx.xi, tx.xj, tx.xk])
