@@ -24,19 +24,19 @@ CONTROLLER_COLOR = [255, 255, 255, 255]
 CLEAR_DELAY = 1
 VELOCITY_TIME_MULT = 1
 
+
 class GuiConfig(BaseModel):
-    vr_origin: str = Field(default = 'T_1')
-    vr_x : str = Field(default = 'T_2')
-    vr_y : str = Field(default = 'T_3')
+    vr_origin: str = Field(default = 'T_3')
+    vr_x : str = Field(default = 'T_4')
+    vr_y : str = Field(default = 'T_1')
     
 
 class Scene:
     def __init__(self):
-        self.width = 1500
-        self.height = 1500
+        self.width = dpg.get_viewport_width()
+        self.height = dpg.get_viewport_height()
         self.is_open = False
-        
-        
+
         self.bounds = np.asarray([-1, -1, 10, 5])  # x left, y bot, x right, y top
         self.resized = True
         
@@ -47,8 +47,7 @@ class Scene:
         
         dpg.delete_item(self.canvas, children_only = True)
         if references:
-            if self.update_references(references):
-                self.resized = True 
+            self.update_references(references)
         if trackers:
             self.update_trackers(trackers)
             
@@ -74,7 +73,8 @@ class Scene:
         
         if (bounds != self.bounds).any():
             self.bounds = bounds
-            return True
+            self.resized = True
+            print('resizing')
         return False
 
     def update_trackers(self, trackers):
@@ -94,11 +94,10 @@ class Scene:
         diameter = 15
         label = reference.label
 
-        text = dpg.draw_text([center[0] + diameter + 5, center[1] + 6], color=REFERENCE_COLOR, text=label, size=18, parent = self.canvas)
-        circ = dpg.draw_circle(center, diameter, color=REFERENCE_COLOR, fill=REFERENCE_COLOR, parent = self.canvas)
+        dpg.draw_text([center[0] + diameter + 5, center[1] + 6], color=REFERENCE_COLOR, text=label, size=18, parent = self.canvas)
+        dpg.draw_circle(center, diameter, color=REFERENCE_COLOR, fill=REFERENCE_COLOR, parent = self.canvas)
         return
-            
-            
+
     def draw_tracker(self, tracker):
         center = self.xy2pixels([tracker.xi, tracker.xj])
         diameter = 10
@@ -113,11 +112,10 @@ class Scene:
         
         vel_pt = [center[0] + vel_delta[0], center[1] + vel_delta[1]]
 
-
-        text = dpg.draw_text([center[0] + diameter + 5, center[1] + 6], color=TRACKER_COLOR, text=label, size=18, parent = self.canvas)
-        circ = dpg.draw_circle(center, diameter, color = TRACKER_COLOR, fill=TRACKER_COLOR, parent = self.canvas)
-        line = dpg.draw_line(center, yaw_line_pt, color = PURPLE, thickness = 3, parent = self.canvas)
-        vel_line = dpg.draw_arrow(vel_pt, center, color = RED, thickness = 3, parent = self.canvas)
+        dpg.draw_text([center[0] + diameter + 5, center[1] + 6], color=TRACKER_COLOR, text=label, size=18, parent = self.canvas)
+        dpg.draw_circle(center, diameter, color = TRACKER_COLOR, fill=TRACKER_COLOR, parent = self.canvas)
+        dpg.draw_line(center, yaw_line_pt, color = PURPLE, thickness = 3, parent = self.canvas)
+        dpg.draw_arrow(vel_pt, center, color = RED, thickness = 3, parent = self.canvas)
         
         return
 
@@ -152,10 +150,12 @@ class Scene:
         
         return
 
+
 class PopupWindow():
     def __init__(self):
         self.window = dpg.add_window(pos = [40,40], width = 500, height = 500, on_close = self.on_close)
         self.hide()
+        self.visible = False
     
     def clear(self):
         dpg.delete_item(self.window, children_only = True)
@@ -200,9 +200,10 @@ class DeviceWindow(PopupWindow):
             dpg.add_text(tracker.serial, parent = self.window)
             dpg.add_same_line(parent = self.window)
             dpg.add_text('x: %0.3f y:%0.3f z:%0.3f'%(tracker.xi, tracker.xj, tracker.xk), parent = self.window)
-            dpg.add_slider_float(no_input = True, min_value = 0, max_value = 100, default_value = tracker.charge, enabled = False, parent = self.window)
+            dpg.add_slider_float(no_input = True, min_value = 0, max_value = 1, default_value = tracker.charge, enabled = False, parent = self.window)
             dpg.add_spacing(parent = self.window)
         return
+
 
 class CalibrationWindow(PopupWindow):
     
@@ -212,26 +213,23 @@ class CalibrationWindow(PopupWindow):
         
         self.window = dpg.add_window(pos = [40,40], width = 500, height = 500, on_close = self.on_close)
         self.hide()
-        labels = '[]' #[tracker.label for tracker in trackers]
+        labels = '[]'
         
         dpg.add_text('Please select a tracker for \n each axis. Available trackers \n are listed below for convenience:', parent = self.window)
-        dpg.add_spacing(parent = self.window)
+        dpg.add_spacing(parent=self.window)
         self.labels = dpg.add_text(str(labels), parent = self.window)
         self.text_origin = dpg.add_input_text(label = 'origin', default_value=self.config.vr_origin, parent = self.window)
         self.text_x = dpg.add_input_text(label = 'x axis', default_value=self.config.vr_x, parent = self.window)
         self.text_y = dpg.add_input_text(label = 'y axis', default_value=self.config.vr_y, parent = self.window)
-        
-        
-        dpg.add_button(label = 'Start calibration', callback=self.run_calibration, parent = self.window)
+
+        dpg.add_button(label='Start calibration', callback=self.run_calibration, parent = self.window)
         
     def update(self, references, trackers):
         labels = str([tracker.label for tracker in trackers])
         dpg.set_value(self.labels, labels)
         
         return
-        
-        
-    
+
     def run_calibration(self):
         vr_origin = dpg.get_value(self.text_origin)
         vr_x = dpg.get_value(self.text_x)
@@ -265,8 +263,8 @@ class Window:
     
     def create_window(self):
         dpg.setup_viewport()
-        dpg.set_viewport_width(1500)
-        dpg.set_viewport_height(1500)
+        dpg.set_viewport_width(800)
+        dpg.set_viewport_height(800)
         
         bar = dpg.add_viewport_menu_bar() 
         dpg.add_button(label = "Save Configuration", callback=self.save_config, parent = bar)
@@ -336,8 +334,7 @@ class Window:
             
         dpg.render_dearpygui_frame()    
         return   
-    
-        
+
 
 if __name__ == '__main__':
     gui_pipe, child_conn = Pipe()
