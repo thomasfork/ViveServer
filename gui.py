@@ -4,6 +4,8 @@ import dearpygui.dearpygui as dpg
 from pydantic import BaseModel, Field
 import time
 
+from main import VRConfig
+
 from multiprocessing import Process, Queue  # queue over pipe to avoid buffer hang issues
 
 RED = [255, 0, 0, 255]
@@ -209,7 +211,7 @@ class DeviceWindow(PopupWindow):
             dpg.add_same_line(parent=self.window)
             dpg.add_text(tracker.serial, parent=self.window)
             dpg.add_same_line(parent=self.window)
-            dpg.add_text('x: %0.3f y:%0.3f z:%0.3f' % (tracker.xi, tracker.xj, tracker.xk), parent=self.window)
+            dpg.add_text('x: %7.3f y:%7.3f z:%7.3f' % (tracker.xi, tracker.xj, tracker.xk), parent=self.window)
             dpg.add_slider_float(no_input=True, min_value=0, max_value=1, default_value=tracker.charge, enabled=False,
                                  parent=self.window)
             dpg.add_spacing(parent=self.window)
@@ -219,11 +221,9 @@ class DeviceWindow(PopupWindow):
 class CalibrationWindow(PopupWindow):
 
     def __init__(self, calibration_function, config: GuiConfig = GuiConfig()):
+        super().__init__()
         self.config = config
         self.calibration_function = calibration_function
-
-        self.window = dpg.add_window(pos=[40, 40], width=500, height=500, on_close=self.on_close)
-        self.hide()
         labels = '[]'
 
         dpg.add_text(
@@ -254,10 +254,21 @@ class CalibrationWindow(PopupWindow):
 
 
 class ConfigWindow(PopupWindow):
+    def __init__(self):
+        super().__init__()
+        self.config = VRConfig()
 
-    def update(self, config):
+    def update(self):
+        # TODO: add editing of fields
         self.clear()
-        dpg.add_text('TODO', parent=self.window)
+        dpg.add_text('xi: %0.4f'%self.config.xi, parent=self.window)
+        dpg.add_text('xj: %0.4f'%self.config.xj, parent=self.window)
+        dpg.add_text('xk: %0.4f'%self.config.xk, parent=self.window)
+        dpg.add_text('qi: %0.4f'%self.config.qi, parent=self.window)
+        dpg.add_text('qj: %0.4f'%self.config.qj, parent=self.window)
+        dpg.add_text('qk: %0.4f'%self.config.qk, parent=self.window)
+        dpg.add_text('qr: %0.4f'%self.config.qr, parent=self.window)
+        dpg.add_text(self.config.name_mappings, parent=self.window)
 
 
 class Window:
@@ -282,17 +293,31 @@ class Window:
         dpg.set_viewport_height(800)
 
         bar = dpg.add_viewport_menu_bar()
-        dpg.add_button(label="Save Configuration", callback=self.save_config, parent=bar)
+        dpg.add_button(label="Restart VR", callback=self.restart_vr, parent=bar)
         dpg.add_button(label="Calibrate", callback=self.show_calibration_window, parent=bar)
+        dpg.add_button(label="Save Calibration", callback=self.save_calibration, parent=bar)
+        dpg.add_button(label="Show Calibration", callback=self.show_calibration, parent=bar)
         dpg.add_button(label="List Devices", callback=self.list_devices, parent=bar)
-        dpg.add_button(label="Show Configuration", callback=self.show_config, parent=bar)
 
         dpg.set_viewport_resize_callback(self.resize_window)
-
-    def save_config(self):
+    
+    def restart_vr(self):
+        msg = ['restart_vr']
+        try:
+            self.queue_out.put(msg)
+        except BrokenPipeError:
+            pass
+        return
+    
+    def save_calibration(self):
+        msg = ['save_calibration']
+        try:
+            self.queue_out.put(msg)
+        except BrokenPipeError:
+            pass
         return
 
-    def show_config(self):
+    def show_calibration(self):
         self.config_window.toggle_visibility()
         return
 
@@ -334,22 +359,29 @@ class Window:
 
             messages = self.queue_in.get()
             for message in messages:
-                if 'LHB' in message.serial:
-                    references.append(message)
-                elif 'LHR' in message.serial:
-                    trackers.append(message)
+                # not strictly typed since pickle and depickle through the pipe breaks isinstance(obj, class)
+                if type(message).__name__ == 'TrackerState':
+                    if 'LHB' in message.serial:
+                        references.append(message)
+                    elif 'LHR' in message.serial:
+                        trackers.append(message)
+                elif type(message).__name__ == 'VRConfig':
+                    self.config_window.config = message
+                else:
+                    print(message)
+                    print(type(message).__name__)
 
             self.scene.update(references, trackers)
             self.device_window.update(references, trackers)
             self.calibration_window.update(references, trackers)
-            self.config_window.update(self.config)
+            self.config_window.update()
             self.last_msg_time = time.time()
 
         if time.time() - self.last_msg_time > CLEAR_DELAY:  # in the absence of data for too long, clear the screen.
             self.scene.update(references, trackers)
             self.device_window.update(references, trackers)
             self.calibration_window.update(references, trackers)
-            self.config_window.update(self.config)
+            self.config_window.update()
 
         dpg.render_dearpygui_frame()
         return

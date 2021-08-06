@@ -1,13 +1,16 @@
-from triad_openvr import *
 import socket
 from pydantic import BaseModel, Field
 import numpy as np
-import openvr
-
 from multiprocessing import Process, Queue
+import pathlib
+import os
+from scipy.spatial.transform import Rotation
+
+import openvr
+from triad_openvr import *
+
 import gui
 
-from scipy.spatial.transform import Rotation
 
 # TODO does not properly end in pycharm on window close, even though processes all end...
 
@@ -72,10 +75,7 @@ class TrackerState(BaseModel):
                           2 * (self.qj * self.qk - self.qi * self.qr),
                           1 - 2 * self.qi ** 2 - 2 * self.qj ** 2]]).T
 
-    def unpack_vive_device(self, device, label=None, name_mappings=None, origin=None, rotation=None):
-        if name_mappings is None:
-            name_mappings = {}
-
+    def unpack_vive_device(self, device, label=None, vr_config: VRConfig = None):
         pose = device.get_pose_matrix()
         vel = device.get_velocity()
         w = device.get_angular_velocity()
@@ -85,14 +85,19 @@ class TrackerState(BaseModel):
             return
         
         self.valid = True
+        if not vr_config:
+            vr_config = VRConfig()
 
         self.serial = device.get_serial()
-        if self.serial in name_mappings.keys():
-            self.label = name_mappings[self.serial]
+        if self.serial in vr_config.name_mappings.keys():
+            self.label = vr_config.name_mappings[self.serial]
         elif label:
             self.label = label
         else:
             self.label = self.serial
+
+        origin = np.array([vr_config.xi, vr_config.xj, vr_config.xk])
+        rotation = Rotation.from_quat([vr_config.qi, vr_config.qj, vr_config.qk, vr_config.qr])
 
         # pose in VR frame
         x = np.array([pose[0][3], pose[1][3], pose[2][3]])
@@ -103,35 +108,28 @@ class TrackerState(BaseModel):
         vi, vj, vk = vel
         wi, wj, wk = w
 
-        if origin is not None and rotation is not None:
-            # transform position to calibrated frame
-            x = x - origin
-            self.xi, self.xj, self.xk = rotation.apply(x)
+        # transform position to calibrated frame
+        x = x - origin
+        self.xi, self.xj, self.xk = rotation.apply(x)
 
-            # transform orientation to calibrated frame
-            q = rotation * q
+        # transform orientation to calibrated frame
+        q = rotation * q
 
-            # transform velocity to calibrated frame
-            vi, vj, vk = rotation.apply([vi, vj, vk])
-            wi, wj, wk = rotation.apply([wi, wj, wk])
+        # transform velocity to calibrated frame
+        vi, vj, vk = rotation.apply([vi, vj, vk])
+        wi, wj, wk = rotation.apply([wi, wj, wk])
 
-            # transform pose from HTC vive frame to vehicle frame, with charge port pointing forwards
+        # transform pose from HTC vive frame to vehicle frame, with charge port pointing forwards
 
-            body_rot = Rotation.from_matrix([[0, 1, 0], [1, 0, 0], [0, 0, -1]])
+        body_rot = Rotation.from_matrix([[0, 1, 0], [1, 0, 0], [0, 0, -1]])
 
-            q = (q * body_rot)
-            self.qi, self.qj, self.qk, self.qr = q.as_quat()
+        q = (q * body_rot)
+        self.qi, self.qj, self.qk, self.qr = q.as_quat()
 
-            # use body frame pose to convert calibrated frame velocity to body frame
-            self.v1, self.v2, self.v3 = q.apply([vi, vj, vk], inverse=True)
-            self.w1, self.w2, self.w3 = q.apply([wi, vj, wk], inverse=True)
+        # use body frame pose to convert calibrated frame velocity to body frame
+        self.v1, self.v2, self.v3 = q.apply([vi, vj, vk], inverse=True)
+        self.w1, self.w2, self.w3 = q.apply([wi, vj, wk], inverse=True)
 
-        else:
-            self.xi, self.xj, self.xk = x
-            self.qi, self.qj, self.qk, self.qr = q.as_quat()
-            self.v1, self.v2, self.v3 = q.apply([vi, vj, vk], inverse=True)
-            self.w1, self.w2, self.w3 = q.apply([wi, vj, wk], inverse=True)
-        
         try:
             self.charge = device.get_battery_percent()
         except openvr.error_code.TrackedProp_UnknownProperty:
@@ -146,26 +144,28 @@ class TrackerState(BaseModel):
         
 
 class ViveServer:
-    def __init__(self, udp_config: UDPConfig = UDPConfig(), vr_config: VRConfig = VRConfig()):
+    def __init__(self, udp_config: UDPConfig = UDPConfig()):
         self.udp_config = udp_config
-        self.vr_config = vr_config
+        self.vr_config = VRConfig()
         
         self.should_close = False
         
         self.vr = None
+        self._last_vr_update = time.time() - VR_UPDATE_INTERVAL
         self.socket = None
         self.group = None
         self.gui = None
         self.gui_in = None
         self.gui_out = None
+        self._gui_config_updated = False
         self.trackers = []
         self.tracker_labels = []
         self.references = []
-        
-        self.calibration_origin = np.array([0, 0, 0])
-        self.calibration_rotation = Rotation.from_matrix(np.eye(3))
+
         self.reference_states = []
         self.tracker_states = []
+
+        self.load_calibration()
 
     def step(self):
         if not self.vr:
@@ -218,7 +218,7 @@ class ViveServer:
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, MULTICAST_TTL)
             sock.setsockopt(socket.SOL_IP, socket.IP_MULTICAST_LOOP, 1)
             self.socket = sock
-            self.group  = (self.udp_config.host, self.udp_config.port)
+            self.group = (self.udp_config.host, self.udp_config.port)
             print('connected socket')
         except socket.error:
             self.socket = None
@@ -278,14 +278,10 @@ class ViveServer:
         return
     
     def update_vr_limit(self):
-        if not hasattr(self, '_last_vr_update'):
+        if time.time() - self._last_vr_update > VR_UPDATE_INTERVAL:
             self._last_vr_update = time.time()
             return False
-        else:
-            if time.time() - self._last_vr_update > VR_UPDATE_INTERVAL:
-                self._last_vr_update = time.time()
-                return False
-            return True
+        return True
     
     def poll_vr(self):
         self.reference_states = []
@@ -293,63 +289,16 @@ class ViveServer:
         
         for ref in self.references:
             ref_msg = TrackerState()
-            ref_msg.unpack_vive_device(ref, name_mappings=self.vr_config.name_mappings,
-                                       origin=self.calibration_origin, rotation=self.calibration_rotation)
+            ref_msg.unpack_vive_device(ref, vr_config=self.vr_config)
             self.reference_states.append(ref_msg)
             
         for device, device_label in zip(self.trackers, self.tracker_labels):
             msg = TrackerState()
-            msg.unpack_vive_device(device, device_label, name_mappings=self.vr_config.name_mappings,
-                                   origin=self.calibration_origin, rotation=self.calibration_rotation)
+            msg.unpack_vive_device(device, device_label, vr_config=self.vr_config)
             self.tracker_states.append(msg)
         return
     
-    def reset_calibration(self):
-        self.calibration_origin = np.array([0, 0, 0])
-        self.calibration_rotation = Rotation.from_matrix(np.eye(3))
-        
-    def update_calibration(self, origin_label, x_label, y_label):
-        # TODO: could poll data for some time to average out noise.
-        self.reset_calibration()
-        self.poll_vr()
-        present_labels = [device.label for device in self.tracker_states]
-        
-        try:
-            origin_index = present_labels.index(origin_label)
-            x_index = present_labels.index(x_label)
-            y_index = present_labels.index(y_label)
-        except ValueError:
-            print('calibration trackers not all present')
-            return
-            
-        print('updating calibration')
-
-        to = self.tracker_states[origin_index]
-        tx = self.tracker_states[x_index]
-        ty = self.tracker_states[y_index]
-        
-        x_origin = np.array([to.xi, to.xj, to.xk])
-        x_x = np.array([tx.xi, tx.xj, tx.xk])
-        x_y = np.array([ty.xi, ty.xj, ty.xk])
-        
-        dx = x_x - x_origin
-        dx = dx / np.linalg.norm(dx)
-        
-        dy = x_y - x_origin
-        dy = dy - dx * (np.dot(dx,dy))
-        dy = dy / np.linalg.norm(dy)
-        
-        dz = np.cross(dx,dy)
-        
-        A = np.array([dx,dy,dz])
-
-        self.calibration_origin = x_origin
-        self.calibration_rotation = Rotation.from_matrix(A)
-        return
-    
     def update_gui(self):
-        gui_msg = []
-         
         gui_msg = [*self.reference_states, *self.tracker_states]
 
         try:
@@ -363,13 +312,20 @@ class ViveServer:
             self.gui = None
             return
 
-        while not self.gui_out.empty():
+        if not self._gui_config_updated:
+            self.gui_in.put([self.vr_config])
+            self._gui_config_updated = True
 
+        while not self.gui_out.empty():
             msg = self.gui_out.get()
                 
             if msg[0] == 'calibrate':
                 self.update_calibration(msg[1], msg[2], msg[3])
-
+            elif msg[0] == 'restart_vr':
+                self.vr = None
+            elif msg[0] == 'save_calibration':
+                self.save_calibration()
+                
         return
 
     def broadcast(self):
@@ -382,19 +338,85 @@ class ViveServer:
             self.socket = None
             print('broadcast error')
             return
-        try:
-            ms = (time.time() - self.last_broadcast)*1000
-            #if ms > 5:
-            #    print(round(ms))
-        except:
-            pass
-        self.last_broadcast = time.time()
-
         return
 
     def get_broadcast_messages(self):
         msgs = [msg.to_bytes() for msg in self.tracker_states]
         return msgs
+
+    def update_calibration(self, origin_label, x_label, y_label):
+        present_labels = [device.label for device in self.tracker_states]
+
+        try:
+            origin_index = present_labels.index(origin_label)
+            x_index = present_labels.index(x_label)
+            y_index = present_labels.index(y_label)
+        except ValueError:
+            print('calibration trackers not all present')
+            return
+        
+        self.reset_calibration()
+        self.poll_vr()
+
+        print('updating calibration')
+
+        to = self.tracker_states[origin_index]
+        tx = self.tracker_states[x_index]
+        ty = self.tracker_states[y_index]
+
+        x_origin = np.array([to.xi, to.xj, to.xk])
+        x_x = np.array([tx.xi, tx.xj, tx.xk])
+        x_y = np.array([ty.xi, ty.xj, ty.xk])
+
+        dx = x_x - x_origin
+        dx = dx / np.linalg.norm(dx)
+
+        dy = x_y - x_origin
+        dy = dy - dx * (np.dot(dx, dy))
+        dy = dy / np.linalg.norm(dy)
+
+        dz = np.cross(dx, dy)
+
+        basis_matrix = np.array([dx, dy, dz])
+        rotation = Rotation.from_matrix(basis_matrix)
+
+        # update config object as well
+        self.vr_config.xi, self.vr_config.xj, self.vr_config.xk = x_origin
+        self.vr_config.qi, self.vr_config.qj, self.vr_config.qk, self.vr_config.qr = rotation.as_quat()
+
+        self._gui_config_updated = False
+        return
+
+    def save_calibration(self):
+        filename = get_config_path()
+        with open(filename, 'w+') as f:
+            data = self.vr_config.json()
+            f.seek(0)
+            f.write(data)
+            f.truncate()
+        return
+
+    def load_calibration(self):
+        filename = get_config_path()
+        if os.path.exists(filename):
+            with open(filename) as f:
+                msg = f.readline()
+                self.vr_config = self.vr_config.parse_raw(msg)
+            self._gui_config_updated = False
+        return
+
+    def reset_calibration(self):
+        blank_config = VRConfig()
+        blank_config.name_mappings = self.vr_config.name_mappings
+        self.vr_config = blank_config
+        self._gui_config_updated = False
+        return
+
+
+def get_config_path():
+    path = pathlib.Path(__file__).parent.resolve()
+    filename = path / 'config.txt'
+    return filename
 
 
 if __name__ == '__main__':
@@ -404,5 +426,3 @@ if __name__ == '__main__':
         server.step()
     server.close()
     print('server shutdown')
-
-
