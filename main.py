@@ -2,11 +2,14 @@ import socket
 from multiprocessing import Process, Queue
 import pathlib
 import os
+import time
 
-from triad_openvr import *
+import numpy as np
+import openvr
+from scipy.spatial.transform import Rotation
 
 import gui
-from models import *
+from models import UDPConfig, VRConfig, TrackerState
 
 CONNECT_RETRY_INTERVAL = 1
 VR_UPDATE_INTERVAL = 1
@@ -21,6 +24,7 @@ class ViveServer:
         self.should_close = False
         
         self.vr = None
+        self.vr_compositor = None
         self._last_vr_update = time.time() - VR_UPDATE_INTERVAL
         self.socket = None
         self.group = None
@@ -47,9 +51,6 @@ class ViveServer:
         elif not self.gui.is_alive():
             self.should_close = True
 
-        if self.vr:
-            self.update_vr()
-
         if self.vr:  # update can delete vr
             self.poll_vr()
             
@@ -71,13 +72,10 @@ class ViveServer:
     def open_vr(self):
         if self.connect_attempt_limit('vr'):
             return
-        
-        try:
-            self.vr = TriadOpenVR()
-            print('connected vr')
-        except openvr.error_code.InitError_Init_HmdNotFoundPresenceFailed:
-            print('no HMD found')
-            self.vr = None
+
+        openvr.init(openvr.VRApplication_Scene)
+        self.vr_compositor = openvr.VRCompositor()
+        self.vr = openvr.VRSystem()
 
     def open_socket(self):
         if self.connect_attempt_limit('socket'):
@@ -119,53 +117,34 @@ class ViveServer:
                 return False
             return True
 
-    def update_vr(self):
-        if self.update_vr_limit():
-            return
-
-        self.trackers = []
-        self.tracker_labels = []
-        self.references = []
-
-        try:
-            self.vr.poll_vr_events()
-        except KeyError:
-            self.vr = None
-            return
-
-        if not self.vr.devices:
-            self.vr = None
-            return
-
-        for device_label in self.vr.devices:
-            device = self.vr.devices[device_label]
-            if device.device_class == 'Tracker':
-                self.trackers.append(device)
-                self.tracker_labels.append(device_label)
-            elif device.device_class == 'Tracking Reference':
-                self.references.append(device)
-
-        return
-    
-    def update_vr_limit(self):
-        if time.time() - self._last_vr_update > VR_UPDATE_INTERVAL:
-            self._last_vr_update = time.time()
-            return False
-        return True
-    
     def poll_vr(self):
         self.reference_states = []
         self.tracker_states = []
-        
-        for ref in self.references:
-            ref_msg = TrackerState()
-            ref_msg.unpack_vive_device(ref, vr_config=self.vr_config)
-            self.reference_states.append(ref_msg)
-            
-        for device, device_label in zip(self.trackers, self.tracker_labels):
-            msg = TrackerState()
-            msg.unpack_vive_device(device, device_label, vr_config=self.vr_config)
-            self.tracker_states.append(msg)
+        self.tracker_labels = []
+
+        poses = []
+        poses, _ = self.vr_compositor.waitGetPoses(poses, None)
+
+        for i in range(len(poses)):
+            device_class = self.vr.getTrackedDeviceClass(i)
+            if device_class == openvr.TrackedDeviceClass_Invalid:
+                continue
+            elif device_class == openvr.TrackedDeviceClass_HMD:
+                continue
+            elif device_class == openvr.TrackedDeviceClass_Controller:
+                continue
+            elif device_class == openvr.TrackedDeviceClass_TrackingReference:
+                state = TrackerState()
+                state.unpack_vr_device(self.vr, poses[i], i, self.vr_config)
+                if state.valid:
+                    self.reference_states.append(state)
+                continue
+            elif device_class == openvr.TrackedDeviceClass_GenericTracker:
+                state = TrackerState()
+                state.unpack_vr_device(self.vr, poses[i], i, self.vr_config)
+                if state.valid:
+                    self.tracker_states.append(state)
+                    self.tracker_labels.append(state.label)
         return
     
     def update_gui(self):

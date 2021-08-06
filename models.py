@@ -60,26 +60,32 @@ class TrackerState(BaseModel):
                           2 * (self.qj * self.qk - self.qi * self.qr),
                           1 - 2 * self.qi ** 2 - 2 * self.qj ** 2]]).T
 
-    def unpack_vive_device(self, device, label=None, vr_config: VRConfig = None):
-        pose = device.get_pose_matrix()
-        vel = device.get_velocity()
-        w = device.get_angular_velocity()
-        
-        if not (pose and vel and w):
+    def unpack_vr_device(self, vr_obj, pose_obj, index, vr_config: VRConfig = None):
+        connected = pose_obj.bDeviceIsConnected
+        valid = pose_obj.bPoseIsValid
+
+        if not (connected and valid):
             self.valid = False
             return
-        
+
         self.valid = True
         if not vr_config:
             vr_config = VRConfig()
 
-        self.serial = device.get_serial()
+        self.serial = vr_obj.getStringTrackedDeviceProperty(index, openvr.Prop_SerialNumber_String)
         if self.serial in vr_config.name_mappings.keys():
             self.label = vr_config.name_mappings[self.serial]
-        elif label:
-            self.label = label
         else:
             self.label = self.serial
+
+        try:
+            self.charge = vr_obj.getFloatTrackedDeviceProperty(index, openvr.Prop_DeviceBatteryPercentage_Float)
+        except openvr.error_code.TrackedProp_UnknownProperty:
+            pass
+
+        pose = pose_obj.mDeviceToAbsoluteTracking
+        vel = pose_obj.vVelocity
+        w = pose_obj.vAngularVelocity
 
         origin = np.array([vr_config.xi, vr_config.xj, vr_config.xk])
         rotation = Rotation.from_quat([vr_config.qi, vr_config.qj, vr_config.qk, vr_config.qr])
@@ -115,10 +121,6 @@ class TrackerState(BaseModel):
         self.v1, self.v2, self.v3 = q.apply([vi, vj, vk], inverse=True)
         self.w1, self.w2, self.w3 = q.apply([wi, vj, wk], inverse=True)
 
-        try:
-            self.charge = device.get_battery_percent()
-        except openvr.error_code.TrackedProp_UnknownProperty:
-            pass
         return
 
     def to_bytes(self):

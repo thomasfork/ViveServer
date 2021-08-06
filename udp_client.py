@@ -1,6 +1,5 @@
 import socket
 import struct
-import dill
 import time
 
 MCAST_GRP = '239.0.0.0' # Administratively scoped IPv4 address space
@@ -12,11 +11,13 @@ try:
 except AttributeError:
     # not available on Windows
     pass
-sock.bind((MCAST_GRP, MCAST_PORT))
+sock.bind(('', MCAST_PORT))
 
 
 mreq = struct.pack('4sl', socket.inet_aton(MCAST_GRP), socket.INADDR_ANY)
 sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)         
                 
 while True:
-    print(sock.recv(1024))
+    t0 =time.time()
+    (sock.recv(1024))
+    print((time.time() -t0) * 1000)
