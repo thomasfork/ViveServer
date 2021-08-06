@@ -9,3 +9,5 @@ venv/
 build/
 install/
 log/
+
+*.egg-info/
