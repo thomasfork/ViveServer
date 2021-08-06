@@ -127,6 +127,9 @@ class TrackerState(BaseModel):
         return self.json().encode()
 
     def from_bytes(self, json_msg):
-        return self.parse_raw(json_msg.decode())
+        try:
+            return self.parse_raw(json_msg.decode())
+        except json.decoder.JSONDecodeError:
+            return None
         
 

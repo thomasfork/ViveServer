@@ -1,8 +1,9 @@
 import socket
 import struct
+import time
 
 from dataclasses import dataclass, field
-from models import TrackerState
+from vive_server.models import TrackerState
 
 
 @dataclass
@@ -11,6 +12,8 @@ class ViveConfig:
     port: int = field(default=5007)
     label: str = field(default='T_1')
     
+    # causes the socket to cycle until it finds a message from the given tracker label
+    # this is in addition to the socket blocking until data is received
     listen_until_msg_received: bool = field(default=True)
     
 
@@ -71,4 +74,6 @@ class ViveClient:
 if __name__ == '__main__':
     cli = ViveClient()
     for j in range(50):
-        print(cli.step())
+        t0 = time.time()
+        cli.step()
+        print((time.time() - t0)*1000)

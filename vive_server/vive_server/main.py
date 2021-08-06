@@ -8,8 +8,8 @@ import numpy as np
 import openvr
 from scipy.spatial.transform import Rotation
 
-import gui
-from models import UDPConfig, VRConfig, TrackerState
+from vive_server import gui
+from vive_server.models import UDPConfig, VRConfig, TrackerState
 
 CONNECT_RETRY_INTERVAL = 1
 VR_UPDATE_INTERVAL = 1

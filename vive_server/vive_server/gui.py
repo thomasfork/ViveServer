@@ -4,7 +4,7 @@ import dearpygui.dearpygui as dpg
 from pydantic import BaseModel, Field
 import time
 
-from models import VRConfig
+from vive_server.models import VRConfig
 
 from multiprocessing import Queue  # queue over pipe to avoid buffer hang issues
 
