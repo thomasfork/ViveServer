@@ -10,6 +10,7 @@ class ViveConfig():
     port: int = field(default = 5007)
     label: str = field(default = 'T_1')
     
+    listen_until_msg_received:bool = field(default = True)
     
     
 
@@ -54,10 +55,15 @@ class ViveClient():
     
     def listen(self):
         try:
-            new_state = self.state.from_bytes(self.sock.recv(1024))
-            if new_state.label == self.config.label:
-                self.state = new_state
-                return self.state
+            while True:
+                new_state = self.state.from_bytes(self.sock.recv(1024))
+                if new_state.label == self.config.label:
+                    self.state = new_state
+                    return self.state
+                    
+                if not self.config.listen_until_msg_received:
+                    break
+                    
         except socket.error:
             self.sock = None
             return -1
