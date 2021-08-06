@@ -19,7 +19,6 @@ VR_UPDATE_INTERVAL = 1
 MULTICAST_TTL = 20
 
 
-
 class ViveServer:
     def __init__(self, udp_config: UDPConfig = UDPConfig()):
         self.udp_config = udp_config

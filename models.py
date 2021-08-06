@@ -1,6 +1,8 @@
 from pydantic import BaseModel, Field
 import numpy as np
 from scipy.spatial.transform import Rotation
+import openvr
+
 
 class UDPConfig(BaseModel):
     host: str = Field(default='239.0.0.0')  # Administratively scoped IPv4 address space, only change last 3 numbers!

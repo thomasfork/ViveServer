@@ -4,8 +4,4 @@
 
 __pycache__/
 venv/
-.idea/misc.xml
-.idea/ViveServer.iml
-.idea/misc.xml
-.idea/ViveServer.iml
-.idea/workspace.xml
+.idea/
