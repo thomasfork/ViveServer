@@ -1,18 +1,12 @@
 import socket
-import numpy as np
 from multiprocessing import Process, Queue
 import pathlib
 import os
-from scipy.spatial.transform import Rotation
 
-import openvr
 from triad_openvr import *
 
 import gui
-from models import * 
-
-
-# TODO does not properly end in pycharm on window close, even though processes all end...
+from models import *
 
 CONNECT_RETRY_INTERVAL = 1
 VR_UPDATE_INTERVAL = 1

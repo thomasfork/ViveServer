@@ -4,17 +4,17 @@ import struct
 from dataclasses import dataclass, field
 from models import TrackerState
 
+
 @dataclass
-class ViveConfig():
-    address: str = field(default = '239.0.0.0')
-    port: int = field(default = 5007)
-    label: str = field(default = 'T_1')
+class ViveConfig:
+    address: str = field(default='239.0.0.0')
+    port: int = field(default=5007)
+    label: str = field(default='T_1')
     
-    listen_until_msg_received:bool = field(default = True)
-    
+    listen_until_msg_received: bool = field(default=True)
     
 
-class ViveClient():
+class ViveClient:
     def __init__(self, config: ViveConfig = None):
         if config is None: 
             config = ViveConfig()
@@ -23,8 +23,7 @@ class ViveClient():
         self.sock = None
         self.state = TrackerState()
         self.step()
-    
-    
+
     def step(self):
         if not self.sock:
             self.connect()
@@ -44,7 +43,6 @@ class ViveClient():
                 # not available on Windows
                 pass
             sock.bind((self.config.address, self.config.port))
-
 
             mreq = struct.pack('4sl', socket.inet_aton(self.config.address), socket.INADDR_ANY)
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq) 
@@ -68,13 +66,9 @@ class ViveClient():
             self.sock = None
             return -1
         return None
-    
+
+
 if __name__ == '__main__':
     cli = ViveClient()
     for j in range(50):
         print(cli.step())
-            
-            
-            
-            
-            

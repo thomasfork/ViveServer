@@ -6,7 +6,7 @@ import time
 
 from models import VRConfig
 
-from multiprocessing import Process, Queue  # queue over pipe to avoid buffer hang issues
+from multiprocessing import Queue  # queue over pipe to avoid buffer hang issues
 
 RED = [255, 0, 0, 255]
 PURPLE = [128, 0, 128, 255]
@@ -121,7 +121,7 @@ class Scene:
         # dpg.draw_line(center, e3_end_pt, color=BLUE, thickness=3, parent=self.canvas)
 
         vel_delta = (tracker.e1() * tracker.v1 + tracker.e2() * tracker.v2 + tracker.e3() * tracker.v3) \
-                    * VELOCITY_TIME_MULT
+            * VELOCITY_TIME_MULT
         if np.linalg.norm(vel_delta) > 0.05:
             vel_delta = self.xy2pixels([vel_delta[0], -vel_delta[1]], True)
             vel_pt = [center[0] + vel_delta[0], center[1] + vel_delta[1]]
@@ -144,26 +144,24 @@ class Scene:
             xp = p[0]
 
             if abs(x - 0) < grid_spacing / 2:
-                line = dpg.draw_line([xp, 0], [xp, self.height], color=GRID_COLOR, thickness=5, parent=self.grid_canvas)
+                dpg.draw_line([xp, 0], [xp, self.height], color=GRID_COLOR, thickness=5, parent=self.grid_canvas)
             else:
-                line = dpg.draw_line([xp, 0], [xp, self.height], color=GRID_COLOR, thickness=1, parent=self.grid_canvas)
-            text = dpg.draw_text([xp + 8, yc], text='%0.1f' % x, color=GRID_TEXT_COLOR, parent=self.grid_canvas,
-                                 size=18)
+                dpg.draw_line([xp, 0], [xp, self.height], color=GRID_COLOR, thickness=1, parent=self.grid_canvas)
+            dpg.draw_text([xp + 8, yc], text='%0.1f' % x, color=GRID_TEXT_COLOR, parent=self.grid_canvas, size=18)
 
         for y in np.arange(y_min, y_max, grid_spacing):
             p = self.xy2pixels([0, y])
             yp = p[1]
             if abs(y - 0) < grid_spacing / 2:
-                line = dpg.draw_line([0, yp], [self.width, yp], color=GRID_COLOR, thickness=5, parent=self.grid_canvas)
+                dpg.draw_line([0, yp], [self.width, yp], color=GRID_COLOR, thickness=5, parent=self.grid_canvas)
             else:
-                line = dpg.draw_line([0, yp], [self.width, yp], color=GRID_COLOR, thickness=1, parent=self.grid_canvas)
-            text = dpg.draw_text([xc + 8, yp], text='%0.1f' % y, color=GRID_TEXT_COLOR, parent=self.grid_canvas,
-                                 size=18)
+                dpg.draw_line([0, yp], [self.width, yp], color=GRID_COLOR, thickness=1, parent=self.grid_canvas)
+            dpg.draw_text([xc + 8, yp], text='%0.1f' % y, color=GRID_TEXT_COLOR, parent=self.grid_canvas, size=18)
 
         return
 
 
-class PopupWindow():
+class PopupWindow:
     def __init__(self):
         self.window = dpg.add_window(pos=[40, 40], width=500, height=500, on_close=self.on_close)
         self.hide()
@@ -237,7 +235,7 @@ class CalibrationWindow(PopupWindow):
 
         dpg.add_button(label='Start calibration', callback=self.run_calibration, parent=self.window)
 
-    def update(self, references, trackers):
+    def update(self, trackers):
         labels = str([tracker.label for tracker in trackers])
         dpg.set_value(self.labels, labels)
 
@@ -261,22 +259,22 @@ class ConfigWindow(PopupWindow):
     def update(self):
         # TODO: add editing of fields
         self.clear()
-        dpg.add_text('xi: %0.4f'%self.config.xi, parent=self.window)
-        dpg.add_text('xj: %0.4f'%self.config.xj, parent=self.window)
-        dpg.add_text('xk: %0.4f'%self.config.xk, parent=self.window)
-        dpg.add_text('qi: %0.4f'%self.config.qi, parent=self.window)
-        dpg.add_text('qj: %0.4f'%self.config.qj, parent=self.window)
-        dpg.add_text('qk: %0.4f'%self.config.qk, parent=self.window)
-        dpg.add_text('qr: %0.4f'%self.config.qr, parent=self.window)
-        dpg.add_text(self.config.name_mappings, parent=self.window)
+        dpg.add_text('xi: %0.4f' % self.config.xi, parent=self.window)
+        dpg.add_text('xj: %0.4f' % self.config.xj, parent=self.window)
+        dpg.add_text('xk: %0.4f' % self.config.xk, parent=self.window)
+        dpg.add_text('qi: %0.4f' % self.config.qi, parent=self.window)
+        dpg.add_text('qj: %0.4f' % self.config.qj, parent=self.window)
+        dpg.add_text('qk: %0.4f' % self.config.qk, parent=self.window)
+        dpg.add_text('qr: %0.4f' % self.config.qr, parent=self.window)
+        dpg.add_text(str(self.config.name_mappings), parent=self.window)
 
 
 class Window:
-    def __init__(self, queue_in:Queue, queue_out: Queue, config: GuiConfig = GuiConfig()):
+    def __init__(self, queue_in: Queue, queue_out: Queue, config: GuiConfig = GuiConfig()):
         self.queue_in = queue_in
         self.queue_out = queue_out
         self.config = config
-        self.vr_config = None  # TODO get vr cooridnate config from server
+        self.vr_config = None
 
         self.create_window()
         self.scene = Scene()
@@ -359,7 +357,7 @@ class Window:
 
             messages = self.queue_in.get()
             for message in messages:
-                # not strictly typed since pickle and depickle through the pipe breaks isinstance(obj, class)
+                # not strictly typed since pickle and un-pickle through the queue breaks isinstance(obj, class)
                 if type(message).__name__ == 'TrackerState':
                     if 'LHB' in message.serial:
                         references.append(message)
@@ -373,16 +371,15 @@ class Window:
 
             self.scene.update(references, trackers)
             self.device_window.update(references, trackers)
-            self.calibration_window.update(references, trackers)
+            self.calibration_window.update(trackers)
             self.config_window.update()
             self.last_msg_time = time.time()
 
         if time.time() - self.last_msg_time > CLEAR_DELAY:  # in the absence of data for too long, clear the screen.
             self.scene.update(references, trackers)
             self.device_window.update(references, trackers)
-            self.calibration_window.update(references, trackers)
+            self.calibration_window.update(trackers)
             self.config_window.update()
 
         dpg.render_dearpygui_frame()
         return
-
