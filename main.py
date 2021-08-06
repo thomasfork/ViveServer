@@ -1,18 +1,19 @@
 from triad_openvr import *
 import socket
 from pydantic import BaseModel, Field
-import json
 import numpy as np
 import openvr
 
-from multiprocessing import Process, Pipe
+from multiprocessing import Process, Queue
 import gui
 
 from scipy.spatial.transform import Rotation
 
+# TODO does not properly end in pycharm on window close, even though processes all end...
+
 CONNECT_RETRY_INTERVAL = 1
 VR_UPDATE_INTERVAL = 1
-MULTICAST_TTL = 2
+MULTICAST_TTL = 20
 
 
 class UDPConfig(BaseModel):
@@ -71,8 +72,10 @@ class TrackerState(BaseModel):
                           2 * (self.qj * self.qk - self.qi * self.qr),
                           1 - 2 * self.qi ** 2 - 2 * self.qj ** 2]]).T
 
-    def unpack_vive_device(self, device, label=None, name_mappings=dict()):
-        
+    def unpack_vive_device(self, device, label=None, name_mappings=None, origin=None, rotation=None):
+        if name_mappings is None:
+            name_mappings = {}
+
         pose = device.get_pose_matrix()
         vel = device.get_velocity()
         w = device.get_angular_velocity()
@@ -83,33 +86,6 @@ class TrackerState(BaseModel):
         
         self.valid = True
 
-        '''self.xi = pose[2][3]
-        self.xj = pose[0][3]
-        self.xk = pose[1][3]
-        q = Rotation.from_matrix([[-pose[2][2], pose[0][2], pose[1][2]],
-                                  [pose[2][0], -pose[0][0], pose[1][0]],
-                                  [pose[2][1], pose[0][1], pose[1][1]]])
-        vj, vk, vi = vel
-        wj, wk, wi = w'''
-
-        self.xi = pose[0][3]
-        self.xj = pose[1][3]
-        self.xk = pose[2][3]
-        q = Rotation.from_matrix([[pose[0][0], pose[0][1], pose[0][2]],
-                                  [pose[1][0], pose[1][1], pose[1][2]],
-                                  [pose[2][0], pose[2][1], pose[2][2]]])
-        vi, vj, vk = vel
-        wi, wj, wk = w
-
-        self.qi, self.qj, self.qk, self.qr = q.as_quat()
-        self.v1, self.v2, self.v3 = q.apply([vi, vj, vk], inverse=True)
-        self.w1, self.w2, self.w3 = q.apply([wi, wj, wk], inverse=True)
-        
-        try:
-            self.charge = device.get_battery_percent()
-        except openvr.error_code.TrackedProp_UnknownProperty:
-            pass
-
         self.serial = device.get_serial()
         if self.serial in name_mappings.keys():
             self.label = name_mappings[self.serial]
@@ -118,35 +94,55 @@ class TrackerState(BaseModel):
         else:
             self.label = self.serial
 
-        return
-    
-    def apply_calibration(self, origin, rotation_object):
+        # pose in VR frame
+        x = np.array([pose[0][3], pose[1][3], pose[2][3]])
+        q = Rotation.from_matrix([[pose[0][0], pose[0][1], pose[0][2]],
+                                  [pose[1][0], pose[1][1], pose[1][2]],
+                                  [pose[2][0], pose[2][1], pose[2][2]]])
+        # velocity in VR frame
+        vi, vj, vk = vel
+        wi, wj, wk = w
 
-        x = np.array([self.xi, self.xj, self.xk])
-        x = x - origin
-        self.xi, self.xj, self.xk = rotation_object.apply(x)
+        if origin is not None and rotation is not None:
+            # transform position to calibrated frame
+            x = x - origin
+            self.xi, self.xj, self.xk = rotation.apply(x)
+
+            # transform orientation to calibrated frame
+            q = rotation * q
+
+            # transform velocity to calibrated frame
+            vi, vj, vk = rotation.apply([vi, vj, vk])
+            wi, wj, wk = rotation.apply([wi, wj, wk])
+
+            # transform pose from HTC vive frame to vehicle frame, with charge port pointing forwards
+
+            body_rot = Rotation.from_matrix([[0, 1, 0], [1, 0, 0], [0, 0, -1]])
+
+            q = (q * body_rot)
+            self.qi, self.qj, self.qk, self.qr = q.as_quat()
+
+            # use body frame pose to convert calibrated frame velocity to body frame
+            self.v1, self.v2, self.v3 = q.apply([vi, vj, vk], inverse=True)
+            self.w1, self.w2, self.w3 = q.apply([wi, vj, wk], inverse=True)
+
+        else:
+            self.xi, self.xj, self.xk = x
+            self.qi, self.qj, self.qk, self.qr = q.as_quat()
+            self.v1, self.v2, self.v3 = q.apply([vi, vj, vk], inverse=True)
+            self.w1, self.w2, self.w3 = q.apply([wi, vj, wk], inverse=True)
         
-        q = Rotation.from_quat([self.qi, self.qj, self.qk, self.qr])
-        new_q = q * rotation_object.inv()
-
-        self.qi, self.qk, self.qj, self.qr = new_q.as_quat()
-        self.v1, self.v2, self.v3 = rotation_object.apply([self.v1, self.v2, self.v3], inverse=False)
-        self.w1, self.w2, self.w3 = rotation_object.apply([self.w1, self.w2, self.w3], inverse=True)
-
-        if self.label == 'T_4':
-            print(self.v1, self.v2, self.v3)
-            print('')
-
+        try:
+            self.charge = device.get_battery_percent()
+        except openvr.error_code.TrackedProp_UnknownProperty:
+            pass
+        return
 
     def to_bytes(self):
-        json_data = json.dumps(self.json(), sort_keys=False)
-        json_data = json_data + "\r"
-        return json_data.encode()
+        return self.json().encode()
 
     def from_bytes(self, json_msg):
-        d = json.loads(json_msg.decode())
-        self.parse_obj(d)
-        return
+        return self.parse_raw(json_msg.decode())
         
 
 class ViveServer:
@@ -160,12 +156,13 @@ class ViveServer:
         self.socket = None
         self.group = None
         self.gui = None
-        self.gui_pipe = None
+        self.gui_in = None
+        self.gui_out = None
         self.trackers = []
         self.tracker_labels = []
         self.references = []
         
-        self.calibration_origin = np.array([0,0,0])
+        self.calibration_origin = np.array([0, 0, 0])
         self.calibration_rotation = Rotation.from_matrix(np.eye(3))
         self.reference_states = []
         self.tracker_states = []
@@ -185,16 +182,21 @@ class ViveServer:
 
         if self.vr:  # update can delete vr
             self.poll_vr()
-            self.apply_calibration()
             
             if self.gui:
                 self.update_gui()
                 
-            # if self.socket:
-            #    self.broadcast()
+            if self.socket:
+                self.broadcast()
 
         if self.should_close:
             return
+
+    def close(self):
+        if self.gui_in:
+            self.gui_in.cancel_join_thread()
+        if self.gui_out:
+            self.gui_out.cancel_join_thread()
 
     def open_vr(self):
         if self.connect_attempt_limit('vr'):
@@ -203,7 +205,8 @@ class ViveServer:
         try:
             self.vr = TriadOpenVR()
             print('connected vr')
-        except:
+        except openvr.error_code.InitError_Init_HmdNotFoundPresenceFailed:
+            print('no HMD found')
             self.vr = None
 
     def open_socket(self):
@@ -225,9 +228,9 @@ class ViveServer:
     def open_gui(self):
         if self.connect_attempt_limit('gui'):
             return
-        self.gui_pipe, child_conn = Pipe()
+        self.gui_in, self.gui_out = Queue(), Queue()
         
-        self.gui = Process(target = gui.Window, args = (child_conn,))
+        self.gui = Process(target=gui.Window, args=(self.gui_in, self.gui_out))
         self.gui.start()
         print('connected gui')
         return 
@@ -290,40 +293,24 @@ class ViveServer:
         
         for ref in self.references:
             ref_msg = TrackerState()
-            ref_msg.unpack_vive_device(ref, name_mappings = self.vr_config.name_mappings)
+            ref_msg.unpack_vive_device(ref, name_mappings=self.vr_config.name_mappings,
+                                       origin=self.calibration_origin, rotation=self.calibration_rotation)
             self.reference_states.append(ref_msg)
             
         for device, device_label in zip(self.trackers, self.tracker_labels):
             msg = TrackerState()
-            msg.unpack_vive_device(device, device_label, name_mappings = self.vr_config.name_mappings)
+            msg.unpack_vive_device(device, device_label, name_mappings=self.vr_config.name_mappings,
+                                   origin=self.calibration_origin, rotation=self.calibration_rotation)
             self.tracker_states.append(msg)
-        '''ref1 = TrackerState(xi = -1, xj = 4, serial = 'LHB1', label = 'ref')
-        ref2 = TrackerState(xi = -1, xj = -7, serial = 'LHB2', label = 'ref')
-        ref3 = TrackerState(xi = 3, xj = 2, serial = 'LHB3', label = 'ref')
-        ref4 = TrackerState(xi = 5, xj = 7, serial = 'LHB4', label = 'ref')
-        
-        
-        t1 = TrackerState(xi = 0.8, xj = 0.9, v1 = 4, serial = 'LHR1', label = 'T_1', charge = 10)
-        t2 = TrackerState(xi = -0.3, xj = 0.5, v2 = 3, serial = 'LHR2', label = 'T_2', charge = 20)
-        t3 = TrackerState(xi = 1.3, xj = 0.5, v1 = 0.3, v2 = 0.9, serial = 'LHR3', label = 'T_3', charge = 40)
-        t4 = TrackerState(xi = 1.9, xj = 2.5, serial = 'LHR4', label = 'T_4', charge = 99.9)
-        
-        self.reference_states = [ref1, ref2, ref3, ref4]
-        self.tracker_states = [t1,t2,t3,t4]'''
         return
     
-    def apply_calibration(self):
-        for state in self.reference_states:
-            state.apply_calibration(self.calibration_origin, self.calibration_rotation)
-        for state in self.tracker_states:
-            state.apply_calibration(self.calibration_origin, self.calibration_rotation)
-    
     def reset_calibration(self):
-        self.calibration_origin = np.array([0,0,0])
+        self.calibration_origin = np.array([0, 0, 0])
         self.calibration_rotation = Rotation.from_matrix(np.eye(3))
         
     def update_calibration(self, origin_label, x_label, y_label):
-        # TODO: poll data for some time to average out noise.
+        # TODO: could poll data for some time to average out noise.
+        self.reset_calibration()
         self.poll_vr()
         present_labels = [device.label for device in self.tracker_states]
         
@@ -342,8 +329,8 @@ class ViveServer:
         ty = self.tracker_states[y_index]
         
         x_origin = np.array([to.xi, to.xj, to.xk])
-        x_x      = np.array([tx.xi, tx.xj, tx.xk])
-        x_y      = np.array([ty.xi, ty.xj, ty.xk])
+        x_x = np.array([tx.xi, tx.xj, tx.xk])
+        x_y = np.array([ty.xi, ty.xj, ty.xk])
         
         dx = x_x - x_origin
         dx = dx / np.linalg.norm(dx)
@@ -355,19 +342,18 @@ class ViveServer:
         dz = np.cross(dx,dy)
         
         A = np.array([dx,dy,dz])
-        
+
         self.calibration_origin = x_origin
         self.calibration_rotation = Rotation.from_matrix(A)
-        
         return
     
     def update_gui(self):
         gui_msg = []
          
         gui_msg = [*self.reference_states, *self.tracker_states]
-        
+
         try:
-            self.gui_pipe.send(gui_msg)           
+            self.gui_in.put(gui_msg)
         except ConnectionResetError:
             self.should_close = True
             self.gui = None
@@ -377,22 +363,9 @@ class ViveServer:
             self.gui = None
             return
 
-        awaiting_data = True
-        while awaiting_data:
-            try:
-                awaiting_data = self.gui_pipe.poll()
-            except BrokenPipeError:
-                awaiting_data = False
+        while not self.gui_out.empty():
 
-            if not awaiting_data:
-                continue
-
-            try:
-                msg = self.gui_pipe.recv()
-            except EOFError:
-                self.should_close = True
-                self.gui = None
-                return
+            msg = self.gui_out.get()
                 
             if msg[0] == 'calibrate':
                 self.update_calibration(msg[1], msg[2], msg[3])
@@ -401,11 +374,22 @@ class ViveServer:
 
     def broadcast(self):
         msgs = self.get_broadcast_messages()
+
         try:
             for msg in msgs:
                 self.socket.sendto(msg, self.group)
         except socket.error:
             self.socket = None
+            print('broadcast error')
+            return
+        try:
+            ms = (time.time() - self.last_broadcast)*1000
+            #if ms > 5:
+            #    print(round(ms))
+        except:
+            pass
+        self.last_broadcast = time.time()
+
         return
 
     def get_broadcast_messages(self):
@@ -418,4 +402,7 @@ if __name__ == '__main__':
 
     while not server.should_close:
         server.step()
+    server.close()
+    print('server shutdown')
+
 
