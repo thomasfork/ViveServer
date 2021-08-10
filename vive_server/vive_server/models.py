@@ -23,7 +23,8 @@ class VRConfig(BaseModel):
                                          'LHR-207B3EA4': 'T_2',
                                          'LHR-55804C5D': 'T_1',
                                          'LHR-77E956FA': 'T_4',
-                                         'LHR-F783E5C2': 'T_5'})
+                                         'LHR-F783E5C2': 'T_5',
+                                         'LHR-1BD0C01B': 'T_6'})
 
 
 class TrackerState(BaseModel):
@@ -77,7 +78,6 @@ class TrackerState(BaseModel):
             self.label = vr_config.name_mappings[self.serial]
         else:
             self.label = self.serial
-
         try:
             self.charge = vr_obj.getFloatTrackedDeviceProperty(index, openvr.Prop_DeviceBatteryPercentage_Float)
         except openvr.error_code.TrackedProp_UnknownProperty:

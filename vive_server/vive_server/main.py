@@ -250,7 +250,9 @@ class ViveServer:
         if os.path.exists(filename):
             with open(filename) as f:
                 msg = f.readline()
+                old_mappings = self.vr_config.name_mappings
                 self.vr_config = self.vr_config.parse_raw(msg)
+                self.vr_config.name_mappings = old_mappings
             self._gui_config_updated = False
         return
 

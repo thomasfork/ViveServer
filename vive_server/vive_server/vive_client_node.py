@@ -32,7 +32,7 @@ class ViveNode(Node):
         
         self.client_config = ViveConfig()
         self.client_config.address = self.host_ip.get_parameter_value().string_value
-        self.client_config.port    = self.host_port.get_parameter_value().string_value
+        #self.client_config.port    = self.host_port.get_parameter_value().string_value
         self.client_config.label   = self.tracker_name.get_parameter_value().string_value
             
 
