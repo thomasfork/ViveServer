@@ -11,3 +11,4 @@ install/
 log/
 
 *.egg-info/
+*.npz
