@@ -119,7 +119,7 @@ class TrackerState(BaseModel):
 
         # use body frame pose to convert calibrated frame velocity to body frame
         self.v1, self.v2, self.v3 = q.apply([vi, vj, vk], inverse=True)
-        self.w1, self.w2, self.w3 = q.apply([wi, vj, wk], inverse=True)
+        self.w1, self.w2, self.w3 = q.apply([wi, wj, wk], inverse=True)
 
         return
 
