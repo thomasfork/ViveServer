@@ -1,5 +1,6 @@
 # ViveServer
 
-Python based package for running a central server that connects to SteamVR via pyopenvr and broadcasts tracker data to clients, which publish odemetry data via ROS2. 
+Python package for using HTC Vive trackers for motion capture. Originally developed for 1/10th scale RC cars.
 
-Includes a user interface on the server for listing and plotting active devices, as well as calibrating the coordinate system based on reference trackers. 
+Features a central server with a user interface for monitoring devices and calibrating VR frame of reference. 
+Broadcasts tracker data over UDP multicast, which can be subscribed to by clients and forwarded over a ROS2 interface. 
