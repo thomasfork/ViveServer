@@ -48,7 +48,7 @@ class UDPServer():
                     self.group  = ('<broadcast>', self.config.port)
                     self.socket_connected = True
                     
-            except socekt.error:
+            except socket.error:
                 self.socket_connected = False
             
         return
