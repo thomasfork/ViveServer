@@ -10,8 +10,9 @@ VR_RETRY_INTERVAL = 1
 
 @dataclass
 class UDPConfig():
-    host: str = field(default = '239.0.0.1') # Administratively scoped IPv4 address space
+    host: str = field(default = '239.0.0.0') # Administratively scoped IPv4 multicast
     port: int = field(default = 5007)
+    mcast: bool = field(default = False)
     
 class UDPServer():
     def __init__(self, config:UDPConfig = UDPConfig()):
@@ -26,18 +27,27 @@ class UDPServer():
             self.connect_socket()
         
         if self.socket:
-            self.write_multicast()
+            self.write()
         return
 
     def connect_socket(self):
         if not self.socket_attempt_limit():
             try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-                sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, MULTICAST_TTL)
-                sock.setsockopt(socket.SOL_IP, socket.IP_MULTICAST_LOOP, 1)
-                self.socket = sock
-                self.group  = (self.config.host, self.config.port)
-                self.socket_connected = True
+                if self.config.mcast: #multicast
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+                    sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, MULTICAST_TTL)
+                    sock.setsockopt(socket.SOL_IP, socket.IP_MULTICAST_LOOP, 1)
+                    self.socket = sock
+                    self.group  = (self.config.host, self.config.port)
+                    self.socket_connected = True
+                else: # broadcast
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                    self.socket = sock
+                    self.group  = ('<broadcast>', self.config.port)
+                    self.socket_connected = True
+                    
             except socekt.error:
                 self.socket_connected = False
             
@@ -59,19 +69,20 @@ class UDPServer():
                 return False
             return True
 
-    def write_multicast(self):
+    def write(self):
         try:
             self.socket.sendto(b'abcdefghijklmnopqrstuvwxyz', self.group)
             #msg = b'F' * 1024 * 32
             #self.socket.sendto(msg, self.group)
+            print('sent data')
         except socket.error:
             self.socket_connected = False
         return
   
-  
+
 if __name__ == '__main__':
-    server = UDPServer(UDPConfig())
+    server = UDPServer(UDPConfig(mcast = False))
     while True:
         server.step()
         time.sleep(0.01)
-             
+
