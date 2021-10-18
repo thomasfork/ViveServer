@@ -132,7 +132,11 @@ class ViveServer:
             elif device_class == openvr.TrackedDeviceClass_HMD:
                 continue
             elif device_class == openvr.TrackedDeviceClass_Controller:
-                continue
+                state = TrackerState()
+                state.unpack_vr_device(self.vr, poses[i], i, self.vr_config)
+                if state.valid:
+                    self.tracker_states.append(state)
+                    self.tracker_labels.append(state.label)
             elif device_class == openvr.TrackedDeviceClass_TrackingReference:
                 state = TrackerState()
                 state.unpack_vr_device(self.vr, poses[i], i, self.vr_config)

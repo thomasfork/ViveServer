@@ -10,7 +10,7 @@ VR_RETRY_INTERVAL = 1
 
 @dataclass
 class UDPConfig():
-    host: str = field(default = '239.0.0.0') # Administratively scoped IPv4 address space
+    host: str = field(default = '239.0.0.1') # Administratively scoped IPv4 address space
     port: int = field(default = 5007)
     
 class UDPServer():
